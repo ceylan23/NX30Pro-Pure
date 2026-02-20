@@ -11,7 +11,7 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  SSH_ACTIONS: true  # 开启 SSH 交互开关
+  SSH_ACTIONS: true
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
@@ -51,11 +51,21 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    # ====== 这是刚才漏掉的关键步骤：呼叫云端 SSH ======
+    # ====== 核心修复：注入官方 MT7981 模板 ======
+    - name: Pre-configure MT7981 Base Config
+      run: |
+        cd openwrt
+        # 1. 强制应用 hanwckf 的 mt7981 底层模板（解决 MT7988 编译错乱的元凶）
+        cp -f defconfig/mt7981-ax3000.config .config
+        # 2. 剥离 TurboACC，防止其覆盖原厂 HNAT 加速
+        sed -i 's/CONFIG_PACKAGE_luci-app-turboacc=y/# CONFIG_PACKAGE_luci-app-turboacc is not set/g' .config
+        # 3. 确保联发科闭源无线面板已安装
+        echo "CONFIG_PACKAGE_luci-app-mtk=y" >> .config
+        make defconfig
+
     - name: SSH connection to Actions
       uses: P3TERX/ssh2actions@v1.0.0
       if: env.SSH_ACTIONS == 'true' || contains(github.event.action, 'ssh')
-    # ===================================================
 
     - name: Download package
       id: package
