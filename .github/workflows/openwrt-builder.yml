@@ -11,7 +11,7 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  SSH_ACTIONS: true  # 开启 SSH 交互
+  SSH_ACTIONS: true  # 开启 SSH 交互开关
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
@@ -50,6 +50,12 @@ jobs:
         cd openwrt
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+
+    # ====== 这是刚才漏掉的关键步骤：呼叫云端 SSH ======
+    - name: SSH connection to Actions
+      uses: P3TERX/ssh2actions@v1.0.0
+      if: env.SSH_ACTIONS == 'true' || contains(github.event.action, 'ssh')
+    # ===================================================
 
     - name: Download package
       id: package
