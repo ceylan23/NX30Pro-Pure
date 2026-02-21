@@ -1,11 +1,11 @@
-name: OpenWrt Builder (Hanwckf Pure - SSH Select)
+name: OpenWrt Builder (padavanonly - SSH Select)
 
 on:
   repository_dispatch:
   workflow_dispatch:
 
 env:
-  REPO_URL: https://github.com/hanwckf/immortalwrt-mt798x
+  REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x
   REPO_BRANCH: openwrt-21.02
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
@@ -42,6 +42,7 @@ jobs:
     - name: Clone source code
       working-directory: /workdir
       run: |
+        df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
@@ -51,16 +52,21 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
-    # ====== 核心修复：注入官方 MT7981 模板 ======
     - name: Pre-configure MT7981 Base Config
       run: |
         cd openwrt
-        # 1. 强制应用 hanwckf 的 mt7981 底层模板（解决 MT7988 编译错乱的元凶）
-        cp -f defconfig/mt7981-ax3000.config .config
-        # 2. 剥离 TurboACC，防止其覆盖原厂 HNAT 加速
-        sed -i 's/CONFIG_PACKAGE_luci-app-turboacc=y/# CONFIG_PACKAGE_luci-app-turboacc is not set/g' .config
-        # 3. 确保联发科闭源无线面板已安装
+        # 1. 使用 padavanonly 的 mt7981 默认配置作为基础
+        # 注意：padavanonly 仓库路径可能略有不同，通常为 targets/configs/ 或 defconfig/
+        if [ -f "defconfig/mt7981-ax3000.config" ]; then
+          cp -f defconfig/mt7981-ax3000.config .config
+        elif [ -f "configs/templates/mt7981-ax3000.config" ]; then
+          cp -f configs/templates/mt7981-ax3000.config .config
+        fi
+        
+        # 2. 注入常用插件 (根据需要增删)
+        echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-mtk=y" >> .config
+        
         make defconfig
 
     - name: SSH connection to Actions
@@ -71,13 +77,15 @@ jobs:
       id: package
       run: |
         cd openwrt
-        make defconfig
         make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile the firmware
       id: compile
       run: |
         cd openwrt
+        echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
