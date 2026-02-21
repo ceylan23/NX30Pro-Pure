@@ -1,4 +1,4 @@
-name: OpenWrt Builder (padavanonly - SSH Select)
+name: OpenWrt Builder (padavanonly - Fix SSH Error)
 
 on:
   repository_dispatch:
@@ -42,28 +42,33 @@ jobs:
     - name: Clone source code
       working-directory: /workdir
       run: |
-        df -hT $PWD
+        # 核心修复 1：强制 Git 全局将 SSH 链接替换为 HTTPS 链接
+        # 解决 luci-app-gpoint 等插件 Permission denied (publickey) 报错
+        git config --global url."https://github.com/".insteadOf "git@github.com:"
+        
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Update & Install feeds
       run: |
         cd openwrt
+        # 核心修复 2：针对配置文件中可能存在的硬编码 SSH 地址进行替换
+        sed -i 's#git@github.com:#https://github.com/#g' feeds.conf.default
+        
         ./scripts/feeds update -a
         ./scripts/feeds install -a
 
     - name: Pre-configure MT7981 Base Config
       run: |
         cd openwrt
-        # 1. 使用 padavanonly 的 mt7981 默认配置作为基础
-        # 注意：padavanonly 仓库路径可能略有不同，通常为 targets/configs/ 或 defconfig/
+        # 自动适配 padavanonly 的配置路径
         if [ -f "defconfig/mt7981-ax3000.config" ]; then
           cp -f defconfig/mt7981-ax3000.config .config
         elif [ -f "configs/templates/mt7981-ax3000.config" ]; then
           cp -f configs/templates/mt7981-ax3000.config .config
         fi
         
-        # 2. 注入常用插件 (根据需要增删)
+        # 确保联发科原厂驱动面板存在，且启用 HNAT 加速插件
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-mtk=y" >> .config
         
@@ -77,6 +82,7 @@ jobs:
       id: package
       run: |
         cd openwrt
+        make defconfig
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
@@ -85,7 +91,6 @@ jobs:
       id: compile
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
@@ -96,6 +101,7 @@ jobs:
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
+        # 适配 padavanonly 编译后的路径
         cd openwrt/bin/targets/*/*
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
