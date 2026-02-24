@@ -7,7 +7,7 @@ on:
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x
   REPO_BRANCH: openwrt-21.02
-  SSH_ACTIONS: true     # 强制开启 SSH 交互
+  SSH_ACTIONS: true
   TZ: Asia/Shanghai
 
 jobs:
@@ -24,18 +24,25 @@ jobs:
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
-        sudo -E apt-get -qq update
-        # 带有 -y 参数，彻底解决卡死等待输入的问题
-        sudo -E apt-get -qq -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-        sudo -E apt-get -qq -y autoremove --purge
-        sudo -E apt-get -qq clean
+        
+        # 强行干掉 Ubuntu 后台自动更新服务，释放 apt 进程锁！
+        sudo systemctl stop apt-daily.timer || true
+        sudo systemctl stop apt-daily-upgrade.timer || true
+        sudo systemctl disable apt-daily.timer || true
+        sudo systemctl disable apt-daily-upgrade.timer || true
+        sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
+        
+        # 已经去掉了 -qq 参数，现在你可以看到实时的下载和安装进度了
+        sudo -E apt-get update
+        sudo -E apt-get -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+        sudo -E apt-get -y autoremove --purge
+        sudo -E apt-get clean
         sudo timedatectl set-timezone "$TZ"
 
     - name: Clone source code
       run: |
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         cd openwrt
-        # 预先拉取最新版 MosDNS 及其必需依赖到 package 目录
         git clone https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
         git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
 
@@ -45,7 +52,7 @@ jobs:
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-        # 核心修复：强制删除 feeds 中自带的废弃/冲突版本
+        # 强制删除 feeds 中自带的废弃/冲突版本
         rm -rf feeds/packages/net/v2ray-geodata
         rm -rf feeds/packages/net/mosdns
         rm -rf feeds/luci/applications/luci-app-mosdns
@@ -53,19 +60,16 @@ jobs:
     - name: Pre-configure (Auto Target & Plugins)
       run: |
         cd openwrt
-        # 1. 自动应用 NX30PRO 官方模板
         if [ -f "defconfig/mt7981-ax3000.config" ]; then
           cp -f defconfig/mt7981-ax3000.config .config
         fi
         
-        # 2. 自动注入所需插件 (包含闭源驱动、加速、MosDNS、终端、定时重启)
         echo "CONFIG_PACKAGE_luci-app-mtk=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-autoreboot=y" >> .config
         
-        # 3. 生成完整配置
         make defconfig
 
     - name: SSH connection to Actions
@@ -75,7 +79,6 @@ jobs:
     - name: Download package
       run: |
         cd openwrt
-        # 下载依赖，如果批量多线程失败，自动切换为单线程带日志重试
         make download -j8 || make download -j1 V=s
         find dl -size -1024c -exec rm -f {} \;
 
