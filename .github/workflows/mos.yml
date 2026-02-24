@@ -1,4 +1,4 @@
-name: OpenWrt Builder (padavanonly - NX30 Pro Custom)
+name: OpenWrt Builder (NX30 Pro - Auto Fix)
 
 on:
   repository_dispatch:
@@ -7,8 +7,6 @@ on:
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x
   REPO_BRANCH: openwrt-21.02
-  SSH_ACTIONS: true
-  UPLOAD_FIRMWARE: true
   TZ: Asia/Shanghai
 
 jobs:
@@ -26,80 +24,71 @@ jobs:
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
         sudo -E apt-get -qq update
-        # 修复：已添加 -y 参数，彻底解决卡死等待输入的问题
+        # 带有 -y 参数，防止卡死
         sudo -E apt-get -qq -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo -E apt-get -qq -y autoremove --purge
         sudo -E apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
-        sudo mkdir -p /workdir
-        sudo chown $USER:$GROUPS /workdir
 
     - name: Clone source code
-      working-directory: /workdir
       run: |
-        git config --global url."https://github.com/".insteadOf "git@github.com:"
         git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+        cd openwrt
+        # 预先拉取最新版 MosDNS 及其必需依赖到 package 目录
+        git clone https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
+        git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
 
     - name: Update & Install feeds
       run: |
         cd openwrt
-        sed -i 's#git@github.com:#https://github.com/#g' feeds.conf.default
         ./scripts/feeds update -a
         ./scripts/feeds install -a
+        
+        # 核心修复：强制删除 feeds 中自带的废弃/冲突版本
+        rm -rf feeds/packages/net/v2ray-geodata
+        rm -rf feeds/packages/net/mosdns
+        rm -rf feeds/luci/applications/luci-app-mosdns
 
-    - name: Pre-configure MT7981 (NX30 Pro)
+    - name: Pre-configure (Auto Target & Plugins)
       run: |
         cd openwrt
+        # 1. 自动应用 NX30PRO 官方模板
         if [ -f "defconfig/mt7981-ax3000.config" ]; then
           cp -f defconfig/mt7981-ax3000.config .config
-          echo "Base config applied from defconfig/"
         fi
         
-        # 基础无线驱动与加速
+        # 2. 自动注入所需插件 (包含闭源驱动、加速、MosDNS、终端、定时重启)
         echo "CONFIG_PACKAGE_luci-app-mtk=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
-        
-        # 新增插件：MosDNS、在线终端、定时重启
         echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-autoreboot=y" >> .config
         
+        # 3. 生成完整配置
         make defconfig
 
-    - name: SSH connection to Actions
-      uses: P3TERX/ssh2actions@v1.0.0
-      if: env.SSH_ACTIONS == 'true'
-
     - name: Download package
-      id: package
       run: |
         cd openwrt
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
+        # 下载依赖，如果批量多线程失败，自动切换为单线程带日志重试
+        make download -j8 || make download -j1 V=s
         find dl -size -1024c -exec rm -f {} \;
 
     - name: Compile the firmware
-      id: compile
       run: |
         cd openwrt
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 V=s
-        echo "status=success" >> $GITHUB_OUTPUT
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Organize files
-      id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
-        cd openwrt/bin/targets/*/*
+        cd openwrt/bin/targets/mediatek/mt7981
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: Upload firmware directory
+    - name: Upload firmware
       uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware_NX30Pro${{ env.FILE_DATE }}
+        name: OpenWrt_NX30Pro${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
