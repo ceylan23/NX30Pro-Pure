@@ -59,9 +59,9 @@ jobs:
         rm -rf feeds/packages/net/mosdns
         rm -rf feeds/luci/applications/luci-app-mosdns
         
-        # 强行替换 Go 编译器环境为 1.22.x，解决 MosDNS v5 的 go.mod 报错
+        # 核心修复：直接拉取最新版 Go 编译器（默认支持 1.24+），不再锁定旧版 22.x
         rm -rf feeds/packages/lang/golang
-        git clone https://github.com/sbwml/packages_lang_golang -b 22.x feeds/packages/lang/golang
+        git clone https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
 
     - name: Pre-configure (NX30Pro Auto Target)
       run: |
