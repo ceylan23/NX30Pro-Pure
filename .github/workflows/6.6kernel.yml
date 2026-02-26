@@ -7,7 +7,6 @@ on:
 env:
   REPO_URL: https://github.com/padavanonly/immortalwrt-mt798x-24.10
   REPO_BRANCH: openwrt-24.10-6.6
-  SSH_ACTIONS: true
   TZ: Asia/Shanghai
 
 jobs:
@@ -24,14 +23,14 @@ jobs:
       run: |
         sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
         sudo docker image prune --all --force
-        # 强行干掉 Ubuntu 后台自动更新服务，释放 apt 进程锁
+        # 释放 apt 进程锁
         sudo systemctl stop apt-daily.timer || true
         sudo systemctl stop apt-daily-upgrade.timer || true
         sudo systemctl disable apt-daily.timer || true
         sudo systemctl disable apt-daily-upgrade.timer || true
         sudo rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock
         
-        # 显示完整进度防止假死
+        # 安装编译依赖
         sudo -E apt-get update
         sudo -E apt-get -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python2.7 python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
         sudo -E apt-get -y autoremove --purge
@@ -42,35 +41,34 @@ jobs:
       run: |
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         cd openwrt
-        # 拉取最新版 MosDNS 及其必需依赖到 package 目录
+        # 拉取 MosDNS 及依赖
         git clone https://github.com/sbwml/luci-app-mosdns -b v5 package/mosdns
         git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
 
     - name: Update & Install feeds
       run: |
         cd openwrt
-        # 强制 Git 使用 HTTPS 链接，避开 SSH 权限错误
+        # 强制 HTTPS 链接避开 SSH 权限错误
         git config --global url."https://github.com/".insteadOf "git@github.com:"
         ./scripts/feeds update -a
         ./scripts/feeds install -a
         
-        # 清理自带的冲突旧包
+        # 清理冲突旧包
         rm -rf feeds/packages/net/v2ray-geodata
         rm -rf feeds/packages/net/mosdns
         rm -rf feeds/luci/applications/luci-app-mosdns
         
-        # 核心修复：直接拉取最新版 Go 编译器（默认支持 1.24+），不再锁定旧版 22.x
+        # 升级 Go 编译器
         rm -rf feeds/packages/lang/golang
         git clone https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
 
     - name: Pre-configure (NX30Pro Auto Target)
       run: |
         cd openwrt
-        # 尝试应用官方机型配置模板
+        # 尝试应用官方模板
         [ -f "defconfig/mt7981-ax3000.config" ] && cp -f defconfig/mt7981-ax3000.config .config || true
         
-        # 【全自动核心】直接硬编码 Target Profile 为 H3C NX30 Pro
-        # 兼容 filogic (6.6内核架构) 和 mt7981 (旧内核架构) 命名
+        # 锁定目标机型
         cat >> .config <<EOF
         CONFIG_TARGET_mediatek=y
         CONFIG_TARGET_mediatek_filogic=y
@@ -79,8 +77,7 @@ jobs:
         CONFIG_TARGET_mediatek_mt7981_DEVICE_h3c_magic-nx30-pro=y
         EOF
         
-        # 注入插件配置
-        echo "CONFIG_PACKAGE_luci-app-mtk=y" >> .config
+        # 注入自定义插件
         echo "CONFIG_PACKAGE_luci-app-turboacc=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
@@ -88,12 +85,8 @@ jobs:
         echo "CONFIG_PACKAGE_luci-app-filetransfer=y" >> .config
         echo "CONFIG_PACKAGE_luci-app-wrtbwmon=y" >> .config
         
-        # 强制生成完整依赖配置
+        # 强制生成完整依赖
         make defconfig
-
-    - name: SSH connection to Actions
-      uses: P3TERX/ssh2actions@v1.0.0
-      if: env.SSH_ACTIONS == 'true'
 
     - name: Download package
       run: |
@@ -109,7 +102,6 @@ jobs:
 
     - name: Organize files
       run: |
-        # 使用通配符自动适配 6.6 内核新的 filogic 目录名
         cd openwrt/bin/targets/mediatek/*
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
