@@ -1,0 +1,148 @@
+name: NX30 Pro NMBM 25.12 Build (EXPERIMENTAL)
+
+# EXPERIMENTAL PORT - DO NOT FLASH TO THE MAIN ROUTER WITHOUT A SPARE-DEVICE TEST.
+# This workflow builds the chasey-dev 25.12 NMBM device, NOT the FIT device.
+# Device: h3c_magic-nx30-pro-nmbm, an alias that inherits
+# h3c_magic-nx30-pro-mtkuboot verbatim (see patches/01-add-nmbm-alias.patch).
+# Board/compatible is therefore h3c,magic-nx30-pro-mtkuboot.
+# sysupgrade.bin is a valid upgrade ONLY within the mtkuboot layout.
+# It is NOT expected to pass a normal sysupgrade device check when coming
+# directly from PadavanOnly NMBM (board h3c,nx30pro). factory.bin is the
+# first-install image for this layout. Forcing sysupgrade with -F across
+# board names is not recommended and is not part of this workflow.
+# This file is a DRAFT in the port workdir. It was NOT pushed to any
+# GitHub repo by the port task. Push it only after the parent agent
+# confirms, and trigger it with workflow_dispatch (it has no push trigger,
+# so merely pushing it will not start a build).
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone chasey-dev source (25.12, closed driver)
+        working-directory: /workdir
+        run: |
+          git clone -b 25.12 --single-branch https://github.com/chasey-dev/immortalwrt-mt798x-rebase.git openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          cd openwrt && git rev-parse HEAD
+
+      - name: Apply NMBM alias patch
+        run: |
+          cd openwrt
+          cat > /tmp/nmbm-alias.patch <<'PATCH'
+          --- a/target/linux/mediatek/image/filogic-ext.mk
+          +++ b/target/linux/mediatek/image/filogic-ext.mk
+          @@ -87,6 +87,12 @@
+           endef
+           TARGET_DEVICES += h3c_magic-nx30-pro-mtkuboot
+           
+          +define Device/h3c_magic-nx30-pro-nmbm
+          +  $(call Device/h3c_magic-nx30-pro-mtkuboot)
+          +  DEVICE_VARIANT := (NMBM layout)
+          +endef
+          +TARGET_DEVICES += h3c_magic-nx30-pro-nmbm
+          +
+           define Device/netcore_n60-pro-mtkuboot
+             DEVICE_VENDOR := Netcore
+             DEVICE_MODEL := N60 Pro
+          PATCH
+          git apply --check /tmp/nmbm-alias.patch
+          git apply /tmp/nmbm-alias.patch
+          grep -q "define Device/h3c_magic-nx30-pro-nmbm" target/linux/mediatek/image/filogic-ext.mk
+          grep -q "TARGET_DEVICES += h3c_magic-nx30-pro-nmbm" target/linux/mediatek/image/filogic-ext.mk
+
+      - name: Update and install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Add luci-theme-vantage and configure NMBM device only
+        run: |
+          cd openwrt
+          git clone --depth 1 https://github.com/anothaDev/luci-theme-vantage.git /tmp/vantage
+          mkdir -p package/custom
+          cp -r /tmp/vantage/luci-theme-vantage package/custom/luci-theme-vantage
+          cp -f defconfig/mt7981-ax3000.config .config
+          sed -i "/CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_/d" .config
+          sed -i "/CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_/d" .config
+          echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_h3c_magic-nx30-pro-nmbm=y" >> .config
+          echo "CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_h3c_magic-nx30-pro-nmbm=\"\"" >> .config
+          sed -i "/luci-app-passwall/d" .config
+          sed -i "/luci-app-ssr-plus/d" .config
+          sed -i "/luci-app-vssr/d" .config
+          sed -i "/luci-app-rclone/d" .config
+          sed -i "/luci-app-mosdns/d" .config
+          sed -i "/luci-theme-argon/d" .config
+          echo "CONFIG_PACKAGE_luci-theme-vantage=y" >> .config
+          echo "CONFIG_PACKAGE_smartdns=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+          echo "CONFIG_PACKAGE_adblock=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-adblock=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-mtd-rw=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          mkdir -p files/etc/crontabs
+          printf "0 4 * * * reboot\n" > files/etc/crontabs/root
+          make defconfig
+          echo "--- config check (any missing line fails the build) ---"
+          grep "DEVICE_h3c_magic-nx30-pro-nmbm=y" .config
+          grep "PACKAGE_luci-theme-vantage=y" .config
+          grep "PACKAGE_smartdns=y" .config
+          grep "PACKAGE_adblock=y" .config
+          grep "PACKAGE_kmod-mtd-rw=y" .config
+          cat files/etc/crontabs/root
+
+      - name: Download package
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \; || true
+
+      - name: Compile firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 V=s
+          echo "FILE_DATE=_$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+
+      - name: Organize and verify both bins (itb rename is a failure)
+        run: |
+          cd openwrt/bin/targets/mediatek/filogic
+          ls -lh *h3c_magic-nx30-pro-nmbm*
+          test -f *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin
+          test -f *h3c_magic-nx30-pro-nmbm*squashfs-sysupgrade.bin
+          echo "factory.bin magic (UBI image must start with UBI#, not FIT d00dfeed):"
+          xxd -l 4 *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin
+          test "$(xxd -p -l 4 *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin)" = "55424923"
+          sha256sum *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin *h3c_magic-nx30-pro-nmbm*squashfs-sysupgrade.bin > sha256sums.txt
+          cat sha256sums.txt
+          mkdir -p $GITHUB_WORKSPACE/firmware
+          cp *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin *h3c_magic-nx30-pro-nmbm*squashfs-sysupgrade.bin sha256sums.txt $GITHUB_WORKSPACE/firmware/
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NX30Pro-NMBM-2512${{ env.FILE_DATE }}
+          path: firmware/
