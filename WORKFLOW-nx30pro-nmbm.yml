@@ -1,0 +1,106 @@
+name: NX30 Pro NMBM Build
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/nx30pro-nmbm.yml"
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone PadavanOnly source (2410, closed driver)
+        working-directory: /workdir
+        run: |
+          git clone -b 2410 --single-branch https://github.com/padavanonly/immortalwrt-mt798x-24.10.git openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          cd openwrt && git rev-parse HEAD
+
+      - name: Update and install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Add luci-theme-vantage and configure NX30 Pro only
+        run: |
+          cd openwrt
+          git clone --depth 1 https://github.com/anothaDev/luci-theme-vantage.git /tmp/vantage
+          mkdir -p package/custom
+          cp -r /tmp/vantage/luci-theme-vantage package/custom/luci-theme-vantage
+          cp -f defconfig/mt7981-ax3000.config .config
+          sed -i "/CONFIG_TARGET_DEVICE_mediatek_mt7981_DEVICE_/d" .config
+          echo "CONFIG_TARGET_DEVICE_mediatek_mt7981_DEVICE_h3c_nx30pro=y" >> .config
+          echo "CONFIG_TARGET_DEVICE_PACKAGES_mediatek_mt7981_DEVICE_h3c_nx30pro=\"\"" >> .config
+          sed -i "/luci-app-passwall/d" .config
+          sed -i "/luci-app-ssr-plus/d" .config
+          sed -i "/luci-app-vssr/d" .config
+          sed -i "/luci-app-rclone/d" .config
+          sed -i "/luci-theme-argon/d" .config
+          echo "CONFIG_PACKAGE_luci-theme-vantage=y" >> .config
+          echo "CONFIG_PACKAGE_smartdns=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
+          echo "CONFIG_PACKAGE_adblock=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-adblock=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-mtd-rw=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          mkdir -p files/etc/crontabs
+          printf "0 4 * * * reboot\n" > files/etc/crontabs/root
+          make defconfig
+          echo "--- config check ---"
+          grep "DEVICE_h3c_nx30pro=y" .config
+          grep "PACKAGE_luci-theme-vantage=y" .config
+          grep "PACKAGE_smartdns=y" .config
+          grep "PACKAGE_adblock=y" .config
+          grep "PACKAGE_kmod-mtd-rw=y" .config
+          cat files/etc/crontabs/root
+
+      - name: Download package
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \; || true
+
+      - name: Compile firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 V=s
+          echo "FILE_DATE=_$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+
+      - name: Organize and verify both bins
+        run: |
+          cd openwrt/bin/targets/mediatek/mt7981
+          ls -lh *h3c_nx30pro*
+          test -f *h3c_nx30pro*squashfs-factory.bin
+          test -f *h3c_nx30pro*squashfs-sysupgrade.bin
+          sha256sum *h3c_nx30pro*squashfs-factory.bin *h3c_nx30pro*squashfs-sysupgrade.bin > sha256sums.txt
+          cat sha256sums.txt
+          mkdir -p $GITHUB_WORKSPACE/firmware
+          cp *h3c_nx30pro*squashfs-factory.bin *h3c_nx30pro*squashfs-sysupgrade.bin sha256sums.txt $GITHUB_WORKSPACE/firmware/
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NX30Pro-NMBM${{ env.FILE_DATE }}
+          path: firmware/
