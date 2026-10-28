@@ -10,9 +10,7 @@ name: NX30 Pro NMBM 25.12 Build (EXPERIMENTAL)
 # directly from PadavanOnly NMBM (board h3c,nx30pro). factory.bin is the
 # first-install image for this layout. Forcing sysupgrade with -F across
 # board names is not recommended and is not part of this workflow.
-# This file is a DRAFT in the port workdir. It was NOT pushed to any
-# GitHub repo by the port task. Push it only after the parent agent
-# confirms, and trigger it with workflow_dispatch (it has no push trigger,
+# EXPERIMENTAL 25.12 NMBM build. Trigger with workflow_dispatch only (it has no push trigger,
 # so merely pushing it will not start a build).
 
 on:
@@ -74,11 +72,29 @@ jobs:
           grep -q "define Device/h3c_magic-nx30-pro-nmbm" target/linux/mediatek/image/filogic-ext.mk
           grep -q "TARGET_DEVICES += h3c_magic-nx30-pro-nmbm" target/linux/mediatek/image/filogic-ext.mk
 
+      - name: Add AdGuardHome and mosdns packages (external sources)
+        run: |
+          cd openwrt
+          # mosdns is NOT in the default feeds: sbwml v5 provides mosdns + luci-app-mosdns (v5.3.4 / 1.7.15)
+          git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/mosdns
+          git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
+          # luci-app-adguardhome is NOT in the official luci feed: rufengsuixing provides the LuCI app;
+          # the adguardhome binary itself comes from the immortalwrt packages feed (openwrt-25.12)
+          mkdir -p package/custom
+          git clone https://github.com/rufengsuixing/luci-app-adguardhome package/custom/luci-app-adguardhome
+
       - name: Update and install feeds
         run: |
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          # Drop feed copies of mosdns/geodata so the sbwml package/ copies win
+          rm -rf feeds/packages/net/v2ray-geodata
+          rm -rf feeds/packages/net/mosdns
+          rm -rf feeds/luci/applications/luci-app-mosdns
+          # mosdns 5.x requires golang >= 1.25 (sbwml README); replace the feed golang with sbwml 26.x
+          rm -rf feeds/packages/lang/golang
+          git clone -b 26.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
 
       - name: Add luci-theme-vantage and configure NMBM device only
         run: |
@@ -98,10 +114,10 @@ jobs:
           sed -i "/luci-app-mosdns/d" .config
           sed -i "/luci-theme-argon/d" .config
           echo "CONFIG_PACKAGE_luci-theme-vantage=y" >> .config
-          echo "CONFIG_PACKAGE_smartdns=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
-          echo "CONFIG_PACKAGE_adblock=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-adblock=y" >> .config
+          echo "CONFIG_PACKAGE_adguardhome=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+          echo "CONFIG_PACKAGE_mosdns=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
           echo "CONFIG_PACKAGE_kmod-mtd-rw=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           mkdir -p files/etc/crontabs
@@ -110,8 +126,11 @@ jobs:
           echo "--- config check (any missing line fails the build) ---"
           grep "DEVICE_h3c_magic-nx30-pro-nmbm=y" .config
           grep "PACKAGE_luci-theme-vantage=y" .config
-          grep "PACKAGE_smartdns=y" .config
-          grep "PACKAGE_adblock=y" .config
+          grep "PACKAGE_adguardhome=y" .config
+          grep "PACKAGE_luci-app-adguardhome=y" .config
+          grep "PACKAGE_mosdns=y" .config
+          grep "PACKAGE_luci-app-mosdns=y" .config
+          if grep -q "PACKAGE_smartdns=y\|PACKAGE_luci-app-smartdns=y\|PACKAGE_adblock=y\|PACKAGE_luci-app-adblock=y" .config; then echo "ERROR: old smartdns/adblock still selected"; exit 1; fi
           grep "PACKAGE_kmod-mtd-rw=y" .config
           cat files/etc/crontabs/root
 
@@ -146,3 +165,4 @@ jobs:
         with:
           name: NX30Pro-NMBM-2512${{ env.FILE_DATE }}
           path: firmware/
+
