@@ -37,11 +37,29 @@ jobs:
           ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
           cd openwrt && git rev-parse HEAD
 
+      - name: Add AdGuardHome and mosdns packages (external sources)
+        run: |
+          cd openwrt
+          # mosdns is NOT in the default feeds: sbwml v5 provides mosdns + luci-app-mosdns (v5.3.4 / 1.7.15)
+          git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/mosdns
+          git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
+          # luci-app-adguardhome is NOT in the official luci feed: rufengsuixing provides the LuCI app;
+          # the adguardhome binary itself comes from the immortalwrt packages feed
+          mkdir -p package/custom
+          git clone https://github.com/rufengsuixing/luci-app-adguardhome package/custom/luci-app-adguardhome
+
       - name: Update and install feeds
         run: |
           cd openwrt
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          # Drop feed copies of mosdns/geodata so the sbwml package/ copies win (pattern from the repo's 6.6 workflow)
+          rm -rf feeds/packages/net/v2ray-geodata
+          rm -rf feeds/packages/net/mosdns
+          rm -rf feeds/luci/applications/luci-app-mosdns
+          # mosdns 5.x requires golang >= 1.25 (sbwml README); replace the feed golang with sbwml 26.x
+          rm -rf feeds/packages/lang/golang
+          git clone -b 26.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
 
       - name: Add luci-theme-vantage and configure NX30 Pro only
         run: |
@@ -59,10 +77,10 @@ jobs:
           sed -i "/luci-app-rclone/d" .config
           sed -i "/luci-theme-argon/d" .config
           echo "CONFIG_PACKAGE_luci-theme-vantage=y" >> .config
-          echo "CONFIG_PACKAGE_smartdns=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-smartdns=y" >> .config
-          echo "CONFIG_PACKAGE_adblock=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-adblock=y" >> .config
+          echo "CONFIG_PACKAGE_adguardhome=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+          echo "CONFIG_PACKAGE_mosdns=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
           echo "CONFIG_PACKAGE_kmod-mtd-rw=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           mkdir -p files/etc/crontabs
@@ -71,8 +89,11 @@ jobs:
           echo "--- config check ---"
           grep "DEVICE_h3c_nx30pro=y" .config
           grep "PACKAGE_luci-theme-vantage=y" .config
-          grep "PACKAGE_smartdns=y" .config
-          grep "PACKAGE_adblock=y" .config
+          grep "PACKAGE_adguardhome=y" .config
+          grep "PACKAGE_luci-app-adguardhome=y" .config
+          grep "PACKAGE_mosdns=y" .config
+          grep "PACKAGE_luci-app-mosdns=y" .config
+          if grep -q "PACKAGE_smartdns=y\|PACKAGE_luci-app-smartdns=y\|PACKAGE_adblock=y\|PACKAGE_luci-app-adblock=y" .config; then echo "ERROR: old smartdns/adblock still selected"; exit 1; fi
           grep "PACKAGE_kmod-mtd-rw=y" .config
           cat files/etc/crontabs/root
 
@@ -104,3 +125,4 @@ jobs:
         with:
           name: NX30Pro-NMBM${{ env.FILE_DATE }}
           path: firmware/
+
