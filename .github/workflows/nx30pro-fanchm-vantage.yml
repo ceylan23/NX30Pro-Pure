@@ -14,8 +14,9 @@ name: NX30 Pro NMBM 25.12 Fanchm + Vantage Build
 #   hardware acceleration / turboacc-mtk).
 # - Appearance: luci-theme-vantage + luci-app-vantage (anothaDev),
 #   NOT luci-theme-fanchmwrt.
-# - Continuity with the user's current firmware: mosdns (sbwml v5) +
-#   AdGuardHome, kmod-mtd-rw, daily 04:00 reboot cron.
+# - Continuity with the user's current firmware: kmod-mtd-rw and a
+#   daily 04:00 reboot cron. NO mosdns / AdGuardHome / smartdns
+#   (user, 2026-11-01: not wanted).
 # sysupgrade from PadavanOnly (board h3c,nx30pro) is expected to be refused;
 # factory.bin is the first-install image for this layout.
 # workflow_dispatch only: pushing this file does not start a build.
@@ -81,26 +82,12 @@ jobs:
           cp -r /tmp/vantage/luci-theme-vantage package/custom/luci-theme-vantage
           cp -r /tmp/vantage/luci-app-vantage package/custom/luci-app-vantage
 
-      - name: Add AdGuardHome and mosdns packages (external sources)
-        run: |
-          cd openwrt
-          git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/mosdns
-          git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
-          mkdir -p package/custom
-          git clone https://github.com/rufengsuixing/luci-app-adguardhome package/custom/luci-app-adguardhome
-
       - name: Update and install feeds (incl. fanchmwrt feed)
         run: |
           cd openwrt
           cp feeds.conf.default feeds.conf
           echo "src-git fanchmwrt https://github.com/fanchmwrt/fanchmwrt-packages.git" >> feeds.conf
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
-          rm -rf feeds/packages/net/v2ray-geodata
-          rm -rf feeds/packages/net/mosdns
-          rm -rf feeds/luci/applications/luci-app-mosdns
-          rm -rf feeds/packages/lang/golang
-          git clone -b 26.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
           ./scripts/feeds install -a
           ls package/feeds/fanchmwrt | head -25
 
@@ -116,7 +103,6 @@ jobs:
           sed -i "/luci-app-ssr-plus/d" .config
           sed -i "/luci-app-vssr/d" .config
           sed -i "/luci-app-rclone/d" .config
-          sed -i "/luci-app-mosdns/d" .config
           sed -i "/luci-theme-argon/d" .config
           # Vantage appearance (theme + dashboard app + zh-cn)
           echo "CONFIG_PACKAGE_luci-theme-vantage=y" >> .config
@@ -132,11 +118,7 @@ jobs:
             echo "CONFIG_PACKAGE_luci-app-fwx-$a=y" >> .config
             echo "CONFIG_PACKAGE_luci-i18n-fwx-$a-zh-cn=y" >> .config
           done
-          # Continuity: mosdns + AdGuardHome + mtd-rw
-          echo "CONFIG_PACKAGE_adguardhome=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
-          echo "CONFIG_PACKAGE_mosdns=y" >> .config
-          echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
+          # Continuity: mtd-rw only (no mosdns/AdGuardHome per user)
           echo "CONFIG_PACKAGE_kmod-mtd-rw=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           mkdir -p files/etc/crontabs
@@ -147,7 +129,7 @@ jobs:
           for s in kmod-mt_wifi kmod-mediatek_hnat kmod-warp luci-app-turboacc-mtk luci-app-mtwifi-cfg \
                    luci-theme-vantage luci-app-vantage kmod-fwx fwxd libfwx_common \
                    luci-app-fwx-appfilter luci-app-fwx-dashboard luci-app-fwx-firewall luci-app-fwx-network \
-                   luci-app-fwx-user luci-app-fwx-system adguardhome luci-app-adguardhome mosdns luci-app-mosdns kmod-mtd-rw; do
+                   luci-app-fwx-user luci-app-fwx-system kmod-mtd-rw; do
             grep -q "CONFIG_PACKAGE_$s=y" .config || { echo "MISSING $s"; exit 1; }
           done
           echo "fwx apps enabled: $(grep -c '^CONFIG_PACKAGE_luci-app-fwx-.*=y' .config)"
@@ -182,7 +164,7 @@ jobs:
           cp *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin *h3c_magic-nx30-pro-nmbm*squashfs-sysupgrade.bin sha256sums.txt $GITHUB_WORKSPACE/firmware/
           cp $GITHUB_WORKSPACE/openwrt/.config $GITHUB_WORKSPACE/firmware/config.txt
           # package manifest proof for the delivery check
-          grep -E "luci-theme-vantage|luci-app-vantage|fwx|mt_wifi|turboacc|mosdns|adguardhome" \
+          grep -E "luci-theme-vantage|luci-app-vantage|fwx|mt_wifi|turboacc" \
             $GITHUB_WORKSPACE/openwrt/bin/targets/mediatek/filogic/*.manifest > $GITHUB_WORKSPACE/firmware/manifest-key-packages.txt || true
           cat $GITHUB_WORKSPACE/firmware/manifest-key-packages.txt
 
