@@ -77,6 +77,12 @@ jobs:
           rm -rf package/fcm
           cp -r /tmp/fanchm/package/fcm package/fcm
           ls package/fcm
+          # Kernel patch fwx needs: adds struct nf_conn.fwx_data +
+          # nf_fwx_user ops (without it kmod-fwx fails to build,
+          # run 41306775346). Verified to apply on vanilla 6.12.112.
+          cp /tmp/fanchm/target/linux/generic/hack-6.12/950-fwx-nf-conn-struct-user-hook.patch \
+            target/linux/generic/hack-6.12/
+          ls target/linux/generic/hack-6.12/ | grep fwx
           git clone --depth 1 https://github.com/anothaDev/luci-theme-vantage.git /tmp/vantage
           mkdir -p package/custom
           cp -r /tmp/vantage/luci-theme-vantage package/custom/luci-theme-vantage
