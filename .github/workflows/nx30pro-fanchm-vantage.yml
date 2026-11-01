@@ -1,0 +1,193 @@
+name: NX30 Pro NMBM 25.12 Fanchm + Vantage Build
+
+# Spec (user, 2026-11-01):
+# - Base: chasey-dev/immortalwrt-mt798x-rebase @ 25.12 (closed-source mt_wifi,
+#   MTK HNAT / TurboACC acceleration kept from the stock mt7981 defconfig).
+# - Device: h3c_magic-nx30-pro-nmbm ONLY (alias inheriting
+#   h3c_magic-nx30-pro-mtkuboot; NMBM, stock partition table, ubi 64M
+#   "small partition"). Board/compatible stays h3c,magic-nx30-pro-mtkuboot.
+# - Features: FanchmWrt fwx suite transplanted from fanchmwrt-25.12.6
+#   (package/fcm: kmod-fwx + fwxd + libfwx_common) plus the
+#   fanchmwrt-packages feed luci-app-fwx-* set (17 apps).
+#   NOT included: luci-app-fwx-wireless (mt_wifi closed driver uses
+#   luci-app-mtwifi-cfg) and luci-app-fwx-fastnat (conflicts with MTK
+#   hardware acceleration / turboacc-mtk).
+# - Appearance: luci-theme-vantage + luci-app-vantage (anothaDev),
+#   NOT luci-theme-fanchmwrt.
+# - Continuity with the user's current firmware: mosdns (sbwml v5) +
+#   AdGuardHome, kmod-mtd-rw, daily 04:00 reboot cron.
+# sysupgrade from PadavanOnly (board h3c,nx30pro) is expected to be refused;
+# factory.bin is the first-install image for this layout.
+# workflow_dispatch only: pushing this file does not start a build.
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone chasey-dev source (25.12, closed driver)
+        working-directory: /workdir
+        run: |
+          git clone -b 25.12 --single-branch https://github.com/chasey-dev/immortalwrt-mt798x-rebase.git openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          cd openwrt && git rev-parse HEAD
+
+      - name: Add NMBM alias device (append, inherits mtkuboot)
+        run: |
+          cd openwrt
+          cat >> target/linux/mediatek/image/filogic-ext.mk <<'EOF'
+
+          define Device/h3c_magic-nx30-pro-nmbm
+            $(call Device/h3c_magic-nx30-pro-mtkuboot)
+            DEVICE_MODEL := Magic NX30 Pro
+            DEVICE_VARIANT := (NMBM layout)
+            SUPPORTED_DEVICES += h3c,magic-nx30-pro-nmbm
+          endef
+          TARGET_DEVICES += h3c_magic-nx30-pro-nmbm
+          EOF
+          grep -q "define Device/h3c_magic-nx30-pro-nmbm" target/linux/mediatek/image/filogic-ext.mk
+
+      - name: Transplant Fanchm fwx core and Vantage theme
+        run: |
+          cd openwrt
+          git clone --depth 1 -b fanchmwrt-25.12.6 https://github.com/fanchmwrt/fanchmwrt.git /tmp/fanchm
+          rm -rf package/fcm
+          cp -r /tmp/fanchm/package/fcm package/fcm
+          ls package/fcm
+          git clone --depth 1 https://github.com/anothaDev/luci-theme-vantage.git /tmp/vantage
+          mkdir -p package/custom
+          cp -r /tmp/vantage/luci-theme-vantage package/custom/luci-theme-vantage
+          cp -r /tmp/vantage/luci-app-vantage package/custom/luci-app-vantage
+
+      - name: Add AdGuardHome and mosdns packages (external sources)
+        run: |
+          cd openwrt
+          git clone -b v5 https://github.com/sbwml/luci-app-mosdns package/mosdns
+          git clone https://github.com/sbwml/v2ray-geodata package/v2ray-geodata
+          mkdir -p package/custom
+          git clone https://github.com/rufengsuixing/luci-app-adguardhome package/custom/luci-app-adguardhome
+
+      - name: Update and install feeds (incl. fanchmwrt feed)
+        run: |
+          cd openwrt
+          cp feeds.conf.default feeds.conf
+          echo "src-git fanchmwrt https://github.com/fanchmwrt/fanchmwrt-packages.git" >> feeds.conf
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          rm -rf feeds/packages/net/v2ray-geodata
+          rm -rf feeds/packages/net/mosdns
+          rm -rf feeds/luci/applications/luci-app-mosdns
+          rm -rf feeds/packages/lang/golang
+          git clone -b 26.x https://github.com/sbwml/packages_lang_golang feeds/packages/lang/golang
+          ./scripts/feeds install -a
+          ls package/feeds/fanchmwrt | head -25
+
+      - name: Configure NX30 Pro NMBM only + fwx + vantage
+        run: |
+          cd openwrt
+          cp -f defconfig/mt7981-ax3000.config .config
+          sed -i "/CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_/d" .config
+          sed -i "/CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_/d" .config
+          echo "CONFIG_TARGET_DEVICE_mediatek_filogic_DEVICE_h3c_magic-nx30-pro-nmbm=y" >> .config
+          echo "CONFIG_TARGET_DEVICE_PACKAGES_mediatek_filogic_DEVICE_h3c_magic-nx30-pro-nmbm=\"\"" >> .config
+          sed -i "/luci-app-passwall/d" .config
+          sed -i "/luci-app-ssr-plus/d" .config
+          sed -i "/luci-app-vssr/d" .config
+          sed -i "/luci-app-rclone/d" .config
+          sed -i "/luci-app-mosdns/d" .config
+          sed -i "/luci-theme-argon/d" .config
+          # Vantage appearance (theme + dashboard app + zh-cn)
+          echo "CONFIG_PACKAGE_luci-theme-vantage=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-vantage=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-vantage-theme-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-vantage-zh-cn=y" >> .config
+          # Fanchm fwx core
+          echo "CONFIG_PACKAGE_kmod-fwx=y" >> .config
+          echo "CONFIG_PACKAGE_fwxd=y" >> .config
+          echo "CONFIG_PACKAGE_libfwx_common=y" >> .config
+          # Fanchm fwx LuCI apps (wireless/fastnat intentionally excluded)
+          for a in app-center appfilter dashboard dashboard-setting feature firewall mac-blacklist macfilter network record record-whitelist resources session-stat system traffic-stat user user-record; do
+            echo "CONFIG_PACKAGE_luci-app-fwx-$a=y" >> .config
+            echo "CONFIG_PACKAGE_luci-i18n-fwx-$a-zh-cn=y" >> .config
+          done
+          # Continuity: mosdns + AdGuardHome + mtd-rw
+          echo "CONFIG_PACKAGE_adguardhome=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-adguardhome=y" >> .config
+          echo "CONFIG_PACKAGE_mosdns=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-mosdns=y" >> .config
+          echo "CONFIG_PACKAGE_kmod-mtd-rw=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          mkdir -p files/etc/crontabs
+          printf "0 4 * * * reboot\n" > files/etc/crontabs/root
+          make defconfig
+          echo "--- config check (any missing line fails the build) ---"
+          grep -q "DEVICE_h3c_magic-nx30-pro-nmbm=y" .config
+          for s in kmod-mt_wifi kmod-mediatek_hnat kmod-warp luci-app-turboacc-mtk luci-app-mtwifi-cfg \
+                   luci-theme-vantage luci-app-vantage kmod-fwx fwxd libfwx_common \
+                   luci-app-fwx-appfilter luci-app-fwx-dashboard luci-app-fwx-firewall luci-app-fwx-network \
+                   luci-app-fwx-user luci-app-fwx-system adguardhome luci-app-adguardhome mosdns luci-app-mosdns kmod-mtd-rw; do
+            grep -q "CONFIG_PACKAGE_$s=y" .config || { echo "MISSING $s"; exit 1; }
+          done
+          echo "fwx apps enabled: $(grep -c '^CONFIG_PACKAGE_luci-app-fwx-.*=y' .config)"
+          if grep -q "PACKAGE_luci-app-fwx-wireless=y\|PACKAGE_luci-app-fwx-fastnat=y\|PACKAGE_luci-theme-fanchmwrt=y" .config; then echo "ERROR: excluded package selected"; exit 1; fi
+          if grep -q "PACKAGE_smartdns=y\|PACKAGE_luci-app-smartdns=y\|PACKAGE_adblock=y\|PACKAGE_luci-app-adblock=y" .config; then echo "ERROR: old smartdns/adblock still selected"; exit 1; fi
+          cat files/etc/crontabs/root
+
+      - name: Download package
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \; || true
+
+      - name: Compile firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 V=s
+          echo "FILE_DATE=_$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+
+      - name: Organize and verify both bins (itb rename is a failure)
+        run: |
+          cd openwrt/bin/targets/mediatek/filogic
+          ls -lh *h3c_magic-nx30-pro-nmbm*
+          test -f *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin
+          test -f *h3c_magic-nx30-pro-nmbm*squashfs-sysupgrade.bin
+          echo "factory.bin magic (UBI image must start with UBI#, not FIT d00dfeed):"
+          xxd -l 4 *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin
+          test "$(xxd -p -l 4 *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin)" = "55424923"
+          sha256sum *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin *h3c_magic-nx30-pro-nmbm*squashfs-sysupgrade.bin > sha256sums.txt
+          cat sha256sums.txt
+          mkdir -p $GITHUB_WORKSPACE/firmware
+          cp *h3c_magic-nx30-pro-nmbm*squashfs-factory.bin *h3c_magic-nx30-pro-nmbm*squashfs-sysupgrade.bin sha256sums.txt $GITHUB_WORKSPACE/firmware/
+          cp $GITHUB_WORKSPACE/openwrt/.config $GITHUB_WORKSPACE/firmware/config.txt
+          # package manifest proof for the delivery check
+          grep -E "luci-theme-vantage|luci-app-vantage|fwx|mt_wifi|turboacc|mosdns|adguardhome" \
+            $GITHUB_WORKSPACE/openwrt/bin/targets/mediatek/filogic/*.manifest > $GITHUB_WORKSPACE/firmware/manifest-key-packages.txt || true
+          cat $GITHUB_WORKSPACE/firmware/manifest-key-packages.txt
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NX30Pro-NMBM-2512-FanchmVantage${{ env.FILE_DATE }}
+          path: firmware/
