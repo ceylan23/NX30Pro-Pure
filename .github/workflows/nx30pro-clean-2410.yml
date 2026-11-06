@@ -7,10 +7,12 @@ name: NX30 Pro 24.10 Clean Build
 # - Device: h3c_nx30pro ONLY (this tree's native device, subtarget
 #   mediatek/mt7981, board h3c,nx30pro, NMBM small partition ubi 64M).
 # - ONLY additions on top of the base defconfig:
-#   luci-theme-vantage + luci-app-vantage (anothaDev) and
-#   luci-app-ttyd + ttyd (web terminal), with zh-cn i18n.
+#   luci-theme-vantage + luci-app-vantage (anothaDev),
+#   luci-app-ttyd + ttyd (web terminal) and luci-app-autoreboot
+#   (scheduled-reboot plugin, user 2026-11-06), with zh-cn i18n.
 # - NOTHING else added: no mosdns/AdGuardHome/smartdns, no fwx,
-#   no kmod-mtd-rw, no scheduled-reboot cron.
+#   no kmod-mtd-rw, no crontab reboot hack (the autoreboot plugin
+#   covers scheduled reboot).
 # - Base-defconfig bloat removed: passwall / ssr-plus / vssr / rclone /
 #   argon theme.
 # NOTE: board is h3c,nx30pro — different from the 25.12 mtkuboot board
@@ -90,12 +92,14 @@ jobs:
           echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
           echo "CONFIG_PACKAGE_ttyd=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-autoreboot=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-autoreboot-zh-cn=y" >> .config
           echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
           make defconfig
           echo "--- config check (any missing line fails the build) ---"
           grep -q "DEVICE_h3c_nx30pro=y" .config
           for s in kmod-mt_wifi kmod-mediatek_hnat kmod-warp luci-app-turboacc-mtk luci-app-mtwifi-cfg \
-                   luci-theme-vantage luci-app-vantage luci-app-ttyd ttyd; do
+                   luci-theme-vantage luci-app-vantage luci-app-ttyd ttyd luci-app-autoreboot; do
             grep -q "CONFIG_PACKAGE_$s=y" .config || { echo "MISSING $s"; exit 1; }
           done
           if grep -qE "PACKAGE_(luci-app-fwx|fwxd|kmod-fwx|mosdns|luci-app-mosdns|adguardhome|luci-app-adguardhome|smartdns|luci-app-smartdns|luci-app-passwall|luci-app-ssr-plus|luci-theme-argon|kmod-mtd-rw)=y" .config; then echo "ERROR: non-clean package selected"; exit 1; fi
@@ -127,7 +131,7 @@ jobs:
           mkdir -p $GITHUB_WORKSPACE/firmware
           cp *h3c_nx30pro*squashfs-factory.bin *h3c_nx30pro*squashfs-sysupgrade.bin sha256sums.txt $GITHUB_WORKSPACE/firmware/
           cp $GITHUB_WORKSPACE/openwrt/.config $GITHUB_WORKSPACE/firmware/config.txt
-          grep -E "luci-theme-vantage|luci-app-vantage|ttyd|mt_wifi|turboacc" \
+          grep -E "luci-theme-vantage|luci-app-vantage|ttyd|autoreboot|mt_wifi|turboacc" \
             $GITHUB_WORKSPACE/openwrt/bin/targets/mediatek/mt7981/*.manifest > $GITHUB_WORKSPACE/firmware/manifest-key-packages.txt || true
           cat $GITHUB_WORKSPACE/firmware/manifest-key-packages.txt
 
