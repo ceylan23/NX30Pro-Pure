@@ -1,0 +1,138 @@
+name: NX30 Pro 24.10 Clean Build
+
+# Spec (user, 2026-11-06): CLEAN 24.10 build, same idea as the clean 25.12.
+# - Base: padavanonly/immortalwrt-mt798x-24.10 @ branch 2410
+#   (kernel 6.6, closed-source mt_wifi; MTK HNAT / WARP / TurboACC from
+#   the stock mt7981 defconfig kept).
+# - Device: h3c_nx30pro ONLY (this tree's native device, subtarget
+#   mediatek/mt7981, board h3c,nx30pro, NMBM small partition ubi 64M).
+# - ONLY additions on top of the base defconfig:
+#   luci-theme-vantage + luci-app-vantage (anothaDev) and
+#   luci-app-ttyd + ttyd (web terminal), with zh-cn i18n.
+# - NOTHING else added: no mosdns/AdGuardHome/smartdns, no fwx,
+#   no kmod-mtd-rw, no scheduled-reboot cron.
+# - Base-defconfig bloat removed: passwall / ssr-plus / vssr / rclone /
+#   argon theme.
+# NOTE: board is h3c,nx30pro — different from the 25.12 mtkuboot board
+# (h3c,magic-nx30-pro-mtkuboot) the user currently runs; sysupgrade from
+# the 25.12 build is expected to be refused, factory.bin is the
+# first-install image.
+# workflow_dispatch only: pushing this file does not start a build.
+
+on:
+  workflow_dispatch:
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout build repo
+        uses: actions/checkout@main
+
+      - name: Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune --all --force
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler ecj fastjar flex gawk gettext gcc-multilib g++-multilib git gnutls-dev gperf haveged help2man intltool lib32gcc-s1 libc6-dev-i386 libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev libtool libyaml-dev libz-dev lld llvm lrzsz mkisofs msmtp nano ninja-build p7zip p7zip-full patch pkgconf python3 python3-pip python3-ply python3-docutils python3-pyelftools qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev zstd
+          sudo -E apt-get -qq autoremove --purge
+          sudo -E apt-get -qq clean
+          sudo timedatectl set-timezone "$TZ"
+          sudo mkdir -p /workdir
+          sudo chown $USER:$GROUPS /workdir
+
+      - name: Clone PadavanOnly source (2410, closed driver)
+        working-directory: /workdir
+        run: |
+          git clone -b 2410 --single-branch https://github.com/padavanonly/immortalwrt-mt798x-24.10.git openwrt
+          ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+          cd openwrt && git rev-parse HEAD
+
+      - name: Add Vantage theme (only source transplant)
+        run: |
+          cd openwrt
+          git clone --depth 1 https://github.com/anothaDev/luci-theme-vantage.git /tmp/vantage
+          mkdir -p package/custom
+          cp -r /tmp/vantage/luci-theme-vantage package/custom/luci-theme-vantage
+          cp -r /tmp/vantage/luci-app-vantage package/custom/luci-app-vantage
+          ls package/custom
+
+      - name: Update and install feeds
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure NX30 Pro only, clean 24.10 + vantage + ttyd
+        run: |
+          cd openwrt
+          cp -f defconfig/mt7981-ax3000.config .config
+          sed -i "/CONFIG_TARGET_DEVICE_mediatek_mt7981_DEVICE_/d" .config
+          sed -i "/CONFIG_TARGET_DEVICE_PACKAGES_mediatek_mt7981_DEVICE_/d" .config
+          echo "CONFIG_TARGET_DEVICE_mediatek_mt7981_DEVICE_h3c_nx30pro=y" >> .config
+          echo "CONFIG_TARGET_DEVICE_PACKAGES_mediatek_mt7981_DEVICE_h3c_nx30pro=\"\"" >> .config
+          # strip base-defconfig bloat
+          sed -i "/luci-app-passwall/d" .config
+          sed -i "/luci-app-ssr-plus/d" .config
+          sed -i "/luci-app-vssr/d" .config
+          sed -i "/luci-app-rclone/d" .config
+          sed -i "/luci-theme-argon/d" .config
+          # ONLY additions: Vantage appearance + web terminal + zh-cn
+          echo "CONFIG_PACKAGE_luci-theme-vantage=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-vantage=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-vantage-theme-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-vantage-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-ttyd=y" >> .config
+          echo "CONFIG_PACKAGE_ttyd=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-ttyd-zh-cn=y" >> .config
+          echo "CONFIG_PACKAGE_luci-i18n-base-zh-cn=y" >> .config
+          make defconfig
+          echo "--- config check (any missing line fails the build) ---"
+          grep -q "DEVICE_h3c_nx30pro=y" .config
+          for s in kmod-mt_wifi kmod-mediatek_hnat kmod-warp luci-app-turboacc-mtk luci-app-mtwifi-cfg \
+                   luci-theme-vantage luci-app-vantage luci-app-ttyd ttyd; do
+            grep -q "CONFIG_PACKAGE_$s=y" .config || { echo "MISSING $s"; exit 1; }
+          done
+          if grep -qE "PACKAGE_(luci-app-fwx|fwxd|kmod-fwx|mosdns|luci-app-mosdns|adguardhome|luci-app-adguardhome|smartdns|luci-app-smartdns|luci-app-passwall|luci-app-ssr-plus|luci-theme-argon|kmod-mtd-rw)=y" .config; then echo "ERROR: non-clean package selected"; exit 1; fi
+          echo "clean check OK"
+
+      - name: Download package
+        run: |
+          cd openwrt
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \; || true
+
+      - name: Compile firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 V=s
+          echo "FILE_DATE=_$(date +%Y%m%d%H%M)" >> $GITHUB_ENV
+
+      - name: Organize and verify both bins
+        run: |
+          cd openwrt/bin/targets/mediatek/mt7981
+          ls -lh *h3c_nx30pro*
+          test -f *h3c_nx30pro*squashfs-factory.bin
+          test -f *h3c_nx30pro*squashfs-sysupgrade.bin
+          echo "factory.bin magic (UBI image must start with UBI#):"
+          xxd -l 4 *h3c_nx30pro*squashfs-factory.bin
+          test "$(xxd -p -l 4 *h3c_nx30pro*squashfs-factory.bin)" = "55424923"
+          sha256sum *h3c_nx30pro*squashfs-factory.bin *h3c_nx30pro*squashfs-sysupgrade.bin > sha256sums.txt
+          cat sha256sums.txt
+          mkdir -p $GITHUB_WORKSPACE/firmware
+          cp *h3c_nx30pro*squashfs-factory.bin *h3c_nx30pro*squashfs-sysupgrade.bin sha256sums.txt $GITHUB_WORKSPACE/firmware/
+          cp $GITHUB_WORKSPACE/openwrt/.config $GITHUB_WORKSPACE/firmware/config.txt
+          grep -E "luci-theme-vantage|luci-app-vantage|ttyd|mt_wifi|turboacc" \
+            $GITHUB_WORKSPACE/openwrt/bin/targets/mediatek/mt7981/*.manifest > $GITHUB_WORKSPACE/firmware/manifest-key-packages.txt || true
+          cat $GITHUB_WORKSPACE/firmware/manifest-key-packages.txt
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NX30Pro-2410-Clean${{ env.FILE_DATE }}
+          path: firmware/
